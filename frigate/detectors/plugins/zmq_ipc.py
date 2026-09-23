@@ -9,6 +9,7 @@ from pydantic import ConfigDict, Field
 
 from frigate.detectors.detection_api import DetectionApi
 from frigate.detectors.detector_config import BaseDetectorConfig
+from frigate.detectors.jpeg import encode_jpeg
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class ZmqDetectorConfig(BaseDetectorConfig):
         title="ZMQ request timeout in milliseconds",
         description="Timeout for ZMQ requests in milliseconds.",
     )
+    jpeg_quality: int | None = Field(default=None, ge=1, le=100)
     linger_ms: int = Field(
         default=0,
         title="ZMQ socket linger in milliseconds",
@@ -300,7 +302,15 @@ class ZmqIpcDetector(DetectionApi):
 
         try:
             header_bytes = self._build_header(tensor_input)
-            payload_bytes = memoryview(tensor_input.tobytes(order="C"))
+            if self.detector_config.jpeg_quality is not None:
+                payload_bytes = encode_jpeg(
+                    tensor_input[0], quality=self.detector_config.jpeg_quality
+                )
+                header = json.loads(header_bytes)
+                header["encoding"] = "jpeg"
+                header_bytes = json.dumps(header).encode("utf-8")
+            else:
+                payload_bytes = memoryview(tensor_input.tobytes(order="C"))
 
             # Send request
             self._socket.send_multipart([header_bytes, payload_bytes])
