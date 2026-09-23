@@ -133,14 +133,8 @@ class ZmqIpcDetector(DetectionApi):
 
             self._socket.send_multipart([header_bytes])
 
-            # Temporarily increase timeout for model operations
-            original_timeout = self._socket.getsockopt(zmq.RCVTIMEO)
-            self._socket.setsockopt(zmq.RCVTIMEO, 30000)
-
-            try:
-                response_frames = self._socket.recv_multipart()
-            finally:
-                self._socket.setsockopt(zmq.RCVTIMEO, original_timeout)
+            # Availability checks must honor the configured network timeout.
+            response_frames = self._socket.recv_multipart()
 
             if len(response_frames) == 1:
                 try:
@@ -299,8 +293,10 @@ class ZmqIpcDetector(DetectionApi):
 
     def detect_raw(self, tensor_input: np.ndarray) -> np.ndarray:
         if not self._model_ready:
-            logger.warning("Model not ready, returning zero detections")
-            return self._zero_result
+            self._create_socket()
+            self._initialize_model()
+            if not self._model_ready:
+                return self._zero_result
 
         try:
             header_bytes = self._build_header(tensor_input)
@@ -316,21 +312,12 @@ class ZmqIpcDetector(DetectionApi):
             # Ensure output shape and dtype are exactly as expected
             return detections
         except zmq.Again:
-            # Timeout
-            logger.debug("ZMQ detector request timed out; resetting socket")
-            try:
-                self._create_socket()
-                self._initialize_model()
-            except Exception:
-                pass
+            logger.debug("ZMQ detector request timed out; retrying on next frame")
+            self._model_ready = False
             return self._zero_result
         except zmq.ZMQError as exc:
-            logger.error(f"ZMQ detector ZMQError: {exc}; resetting socket")
-            try:
-                self._create_socket()
-                self._initialize_model()
-            except Exception:
-                pass
+            logger.error(f"ZMQ detector ZMQError: {exc}; retrying on next frame")
+            self._model_ready = False
             return self._zero_result
         except Exception as exc:  # noqa: BLE001
             logger.error(f"ZMQ detector unexpected error: {exc}")
