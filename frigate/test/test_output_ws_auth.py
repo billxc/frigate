@@ -4,7 +4,10 @@ import unittest
 from types import SimpleNamespace
 
 from frigate.config import FrigateConfig
-from frigate.output.ws_auth import ws_has_camera_access
+from frigate.output.ws_auth import (
+    ws_environ_has_camera_access,
+    ws_has_camera_access,
+)
 
 
 class TestWsHasCameraAccess(unittest.TestCase):
@@ -44,6 +47,22 @@ class TestWsHasCameraAccess(unittest.TestCase):
         ws = self._make_ws("viewer")
         self.assertTrue(ws_has_camera_access(ws, "front_door", self.config))
         self.assertTrue(ws_has_camera_access(ws, "back_door", self.config))
+
+    def test_closed_connection_has_no_access(self):
+        ws = SimpleNamespace(environ=None)
+        self.assertFalse(ws_has_camera_access(ws, "front_door", self.config))
+        self.assertFalse(ws_has_camera_access(ws, "birdseye", self.config))
+
+    def test_captured_environment_survives_connection_cleanup(self):
+        ws = self._make_ws("limited_user")
+        environ = ws.environ
+        ws.environ = None
+        self.assertTrue(
+            ws_environ_has_camera_access(environ, "front_door", self.config)
+        )
+        self.assertFalse(
+            ws_environ_has_camera_access(environ, "back_door", self.config)
+        )
 
     def test_birdseye_requires_unrestricted_access(self):
         self.assertTrue(

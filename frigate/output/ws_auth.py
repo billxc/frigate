@@ -6,8 +6,8 @@ from frigate.config import FrigateConfig
 from frigate.models import User
 
 
-def _get_valid_ws_roles(ws: Any, config: FrigateConfig) -> list[str]:
-    role_header = ws.environ.get("HTTP_REMOTE_ROLE", "")
+def _get_valid_ws_roles(environ: dict[str, Any], config: FrigateConfig) -> list[str]:
+    role_header = environ.get("HTTP_REMOTE_ROLE", "")
     roles = [
         role.strip()
         for role in role_header.split(config.proxy.separator)
@@ -18,7 +18,17 @@ def _get_valid_ws_roles(ws: Any, config: FrigateConfig) -> list[str]:
 
 def ws_has_camera_access(ws: Any, camera_name: str, config: FrigateConfig) -> bool:
     """Return True when a websocket client is authorized for the camera path."""
-    roles = _get_valid_ws_roles(ws, config)
+    environ = ws.environ
+    return environ is not None and ws_environ_has_camera_access(
+        environ, camera_name, config
+    )
+
+
+def ws_environ_has_camera_access(
+    environ: dict[str, Any], camera_name: str, config: FrigateConfig
+) -> bool:
+    """Authorize a camera using a captured websocket environment."""
+    roles = _get_valid_ws_roles(environ, config)
 
     if not roles:
         return False

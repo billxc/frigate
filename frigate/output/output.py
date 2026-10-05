@@ -32,7 +32,7 @@ from frigate.const import (
 from frigate.output.birdseye import Birdseye
 from frigate.output.camera import JsmpegCamera
 from frigate.output.preview import PreviewRecorder
-from frigate.output.ws_auth import ws_has_camera_access
+from frigate.output.ws_auth import ws_environ_has_camera_access
 from frigate.util.image import SharedMemoryFrameManager, get_blank_yuv_frame
 from frigate.util.process import FrigateProcess
 
@@ -257,11 +257,17 @@ class OutputProcess(FrigateProcess):
             )
             preview_write_times[camera] = frame_time
 
+            # Connections may close while output is processed; retain their environments.
+            with websocket_server.manager.lock:
+                websocket_clients = list(websocket_server.manager.websockets.values())
+            websocket_environs = [ws.environ for ws in websocket_clients]
+
             # send camera frame to ffmpeg process if websockets are connected
             if any(
-                ws.environ["PATH_INFO"].endswith(camera)
-                and ws_has_camera_access(ws, camera, self.config)
-                for ws in websocket_server.manager
+                environ is not None
+                and environ["PATH_INFO"].endswith(camera)
+                and ws_environ_has_camera_access(environ, camera, self.config)
+                for environ in websocket_environs
             ):
                 # write to the converter for the camera if clients are listening to the specific camera
                 jsmpeg_cameras[camera].write_frame(frame.tobytes())
@@ -273,9 +279,10 @@ class OutputProcess(FrigateProcess):
                 and (
                     self.config.birdseye.restream
                     or any(
-                        ws.environ["PATH_INFO"].endswith("birdseye")
-                        and ws_has_camera_access(ws, "birdseye", self.config)
-                        for ws in websocket_server.manager
+                        environ is not None
+                        and environ["PATH_INFO"].endswith("birdseye")
+                        and ws_environ_has_camera_access(environ, "birdseye", self.config)
+                        for environ in websocket_environs
                     )
                 )
             ):
