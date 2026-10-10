@@ -251,6 +251,8 @@ def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> di
                     "yuv420p",
                     "-threads",
                     "2",
+                    "-bf",
+                    "0",
                     "-c:a",
                     "aac",
                     "-ar",
