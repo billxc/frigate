@@ -1,0 +1,12 @@
+# Build the backend fork against the exact v0.18 production runtime.
+# Web assets and binary dependencies are unchanged by this backend-only fork.
+FROM ghcr.io/blakeblackshear/frigate@sha256:b1f339cf08ae9148b0fac4295cf59f8e158455f6e72d29af32b773a3d8129851
+ARG GIT_COMMIT
+LABEL org.opencontainers.image.source="https://github.com/billxc/frigate"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+WORKDIR /opt/frigate
+COPY frigate/ frigate/
+COPY migrations/ migrations/
+RUN printf 'VERSION = "0.18.0-%s"\n' "$GIT_COMMIT" > frigate/version.py \
+    && python3 -m compileall -q frigate \
+    && python3 -m unittest frigate.test.test_external_detection frigate.test.test_zmq_failover frigate.test.test_zmq_ipc frigate.test.test_output_ws_auth
