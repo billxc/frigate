@@ -35,6 +35,7 @@ class ExternalEventMetadata(BaseModel):
     sub_label: str | None = Field(default=None, max_length=100)
     description: str | None = None
     playback_codec: Literal["copy", "h264"] = "copy"
+    recording_timezone: Literal["utc", "local"] = "utc"
 
 
 def _probe(config, path: Path) -> dict:
@@ -101,7 +102,11 @@ def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> di
                     "duplicate": True,
                 }
 
-        stamp = datetime.fromtimestamp(metadata.start_time, UTC)
+        stamp = (
+            datetime.fromtimestamp(metadata.start_time).astimezone()
+            if metadata.recording_timezone == "local"
+            else datetime.fromtimestamp(metadata.start_time, UTC)
+        )
         recording_path = (
             Path(RECORD_DIR)
             / stamp.strftime("%Y-%m-%d/%H")
@@ -214,6 +219,7 @@ def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> di
             "external_source_id": metadata.source_event_id,
             "reported_duration": metadata.reported_duration,
             "playback_codec": metadata.playback_codec,
+            "recording_timezone": metadata.recording_timezone,
             "source_sha256": hashlib.sha256(payload).hexdigest(),
             "description": metadata.description,
             "score": 0,
