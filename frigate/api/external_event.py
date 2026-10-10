@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from frigate.api.auth import require_camera_access, require_role
 from frigate.api.defs.tags import Tags
+from frigate.api.external_detection import DetectionUnavailable, analyze_recording
 from frigate.const import CLIPS_DIR, RECORD_DIR, THUMB_DIR
 from frigate.models import Event, Recordings, ReviewSegment
 
@@ -36,6 +37,7 @@ class ExternalEventMetadata(BaseModel):
     description: str | None = None
     playback_codec: Literal["copy", "h264"] = "copy"
     recording_timezone: Literal["utc", "local"] = "utc"
+    detect_objects: bool = True
 
 
 def _probe(config, path: Path) -> dict:
@@ -76,6 +78,83 @@ def _run_ffmpeg(config, *args: str) -> None:
     )
 
 
+def _apply_detection(config, metadata, event_id, recording_path, duration):
+    """Attach sampled object events to an imported recording and its Review."""
+    result = analyze_recording(config, metadata.camera, recording_path, duration)
+    ids = [event_id]
+    for obj in result["objects"]:
+        suffix = hashlib.sha256(obj["label"].encode()).hexdigest()[:6]
+        object_id = f"{event_id}-{suffix}"
+        ids.append(object_id)
+        snapshot_time = metadata.start_time + obj["snapshot_offset"]
+        clean = Path(CLIPS_DIR) / f"{metadata.camera}-{object_id}-clean.png"
+        thumb = Path(THUMB_DIR) / metadata.camera / f"{object_id}.webp"
+        _run_ffmpeg(
+            config,
+            "-ss",
+            str(obj["snapshot_offset"]),
+            "-i",
+            str(recording_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=640:-2",
+            str(clean),
+        )
+        _run_ffmpeg(
+            config,
+            "-i",
+            str(clean),
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=320:-2",
+            str(thumb),
+        )
+        Event.insert(
+            id=object_id,
+            camera=metadata.camera,
+            label=obj["label"],
+            sub_label=metadata.sub_label,
+            start_time=metadata.start_time + obj["first_offset"],
+            end_time=metadata.start_time + min(obj["last_offset"] + 1, duration),
+            false_positive=False,
+            zones=[],
+            thumbnail=None,
+            has_clip=True,
+            has_snapshot=True,
+            retain_indefinitely=False,
+            data={
+                "type": "object",
+                "source": metadata.source,
+                "external_parent_id": event_id,
+                "sampled_detection": True,
+                "score": obj["score"],
+                "top_score": obj["score"],
+                "box": obj["box"],
+                "region": [0, 0, 1, 1],
+                "snapshot_clean": True,
+                "snapshot_frame_time": snapshot_time,
+            },
+        ).on_conflict_ignore().execute()
+    parent = Event.get_by_id(event_id)
+    Event.update(data={**parent.data, "object_detection": result}).where(
+        Event.id == event_id
+    ).execute()
+    review = ReviewSegment.get_by_id(event_id)
+    ReviewSegment.update(
+        data={
+            **review.data,
+            "detections": ids,
+            "objects": [metadata.label, *[obj["label"] for obj in result["objects"]]],
+        }
+    ).where(ReviewSegment.id == event_id).execute()
+    Recordings.update(objects=sum(obj["samples"] for obj in result["objects"])).where(
+        Recordings.id == event_id
+    ).execute()
+    return result
+
+
 def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> dict:
     digest = hashlib.sha256(
         f"{metadata.camera}/{metadata.source}/{metadata.source_event_id}".encode()
@@ -95,11 +174,21 @@ def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> di
                 and review is not None
                 and Path(recording.path).is_file()
             ):
+                detection = previous.data.get("object_detection")
+                if metadata.detect_objects and detection is None:
+                    detection = _apply_detection(
+                        config,
+                        metadata,
+                        event_id,
+                        Path(recording.path),
+                        recording.duration,
+                    )
                 return {
                     "success": True,
                     "event_id": event_id,
                     "review_id": event_id,
                     "duplicate": True,
+                    "object_detection": detection,
                 }
 
         stamp = (
@@ -275,6 +364,11 @@ def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> di
                 "metadata": None,
             },
         ).on_conflict_ignore().execute()
+        detection = None
+        if metadata.detect_objects:
+            detection = _apply_detection(
+                config, metadata, event_id, recording_path, duration
+            )
         logger.info(
             "Imported external recording %s for camera %s", event_id, metadata.camera
         )
@@ -286,6 +380,7 @@ def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> di
             "start_time": metadata.start_time,
             "end_time": end_time,
             "duration": duration,
+            "object_detection": detection,
         }
 
 
@@ -317,6 +412,10 @@ async def import_external_event(
         return await asyncio.to_thread(
             _store_import, request.app.frigate_config, parsed, payload
         )
+    except DetectionUnavailable:
+        raise HTTPException(
+            503, "Object detection unavailable; import can be retried"
+        ) from None
     except (ValueError, StopIteration):
         raise HTTPException(400, "Invalid recording or metadata") from None
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
