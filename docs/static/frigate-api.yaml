@@ -3972,6 +3972,38 @@ paths:
       security:
         - frigateAdminAuth: []
       x-required-role: admin
+  /events/import:
+    post:
+      tags:
+        - Events
+        - Events
+      summary: Import an external event recording
+      description: |-
+        **Access:** Admin role required.
+
+        Import one existing MP4 using its original event time. Creates native Event, Review and Recordings indexes, snapshots and playback media. Repeating the same source event is idempotent. No live capture is started.
+      operationId: import_external_event_events_import_post
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_import_external_event_events_import_post'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+        - frigateAdminAuth: []
+      x-required-role: admin
   /events:
     get:
       tags:
@@ -7440,6 +7472,22 @@ components:
         - success
       title: BatchExportResultModel
       description: Per-item result for a batch export request.
+    Body_import_external_event_events_import_post:
+      properties:
+        metadata:
+          type: string
+          title: Metadata
+          description: JSON ExternalEventMetadata
+        video:
+          type: string
+          format: binary
+          title: Video
+          description: Existing MP4 recording
+      type: object
+      required:
+        - metadata
+        - video
+      title: Body_import_external_event_events_import_post
     Body_recognize_face_faces_recognize_post:
       properties:
         file:

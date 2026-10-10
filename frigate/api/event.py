@@ -53,6 +53,7 @@ from frigate.api.defs.response.event_response import (
 )
 from frigate.api.defs.response.generic_response import GenericResponse
 from frigate.api.defs.tags import Tags
+from frigate.api.external_event import router as external_event_router
 from frigate.comms.event_metadata_updater import EventMetadataTypeEnum
 from frigate.config.classification import ObjectClassificationType
 from frigate.const import CLIPS_DIR
@@ -66,6 +67,7 @@ from frigate.util.time import get_dst_transitions, get_tz_modifiers
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=[Tags.events])
+router.include_router(external_event_router)
 
 
 def _build_attribute_filter_clause(attributes: str):
