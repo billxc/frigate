@@ -1,6 +1,12 @@
 name: Fork backend image
 on:
   workflow_dispatch:
+  push:
+    branches: [local/import-ai-v0.18]
+    paths:
+      - .github/workflows/fork-image.yml
+      - docker/main/Dockerfile.fork
+      - frigate/**
 permissions:
   contents: read
   packages: write
