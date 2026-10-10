@@ -14,7 +14,7 @@ def collect_objects(samples, tracked, thresholds):
         for label, score, (top, left, bottom, right) in detections:
             if label not in tracked or score < thresholds[label]:
                 continue
-            box = [left, top, right - left, bottom - top]
+            box = [float(left), float(top), float(right - left), float(bottom - top)]
             if label not in objects:
                 objects[label] = {
                     "label": label,
