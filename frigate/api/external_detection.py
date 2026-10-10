@@ -69,11 +69,13 @@ def analyze_recording(config, camera: str, path: Path, duration: float) -> dict:
         if not capture.isOpened():
             raise DetectionUnavailable("Could not decode imported recording")
         for offset in range(int(duration) + 1):
-            if offset >= duration:
+            if offset >= duration - 0.1:
                 break
             capture.set(cv2.CAP_PROP_POS_MSEC, offset * 1000)
             ok, frame = capture.read()
             if not ok:
+                if samples and offset >= duration - 1:
+                    break
                 raise DetectionUnavailable("Could not decode detection sample")
             pixels = frame
             if detector_config.model.input_pixel_format == "rgb":

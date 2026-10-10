@@ -38,6 +38,7 @@ class ExternalEventMetadata(BaseModel):
     playback_codec: Literal["copy", "h264"] = "copy"
     recording_timezone: Literal["utc", "local"] = "utc"
     detect_objects: bool = True
+    generate_description: bool = True
 
 
 def _probe(config, path: Path) -> dict:
@@ -155,6 +156,71 @@ def _apply_detection(config, metadata, event_id, recording_path, duration):
     return result
 
 
+def _apply_description(config, metadata, event_id, recording_path, duration):
+    """Describe archived frames using the configured Frigate vision provider."""
+    from frigate.genai.manager import GenAIClientManager
+
+    client = GenAIClientManager(config).description_client
+    if client is None:
+        raise DetectionUnavailable("No description provider configured")
+    parent = Event.get_by_id(event_id)
+    detection = parent.data.get("object_detection", {})
+    subjects = detection.get("objects", [])
+    subjects = subjects or [{"label": metadata.label, "snapshot_offset": 0}]
+    descriptions = []
+    for obj in subjects:
+        child_id = (
+            event_id + "-" + hashlib.sha256(obj["label"].encode()).hexdigest()[:6]
+            if obj["label"] != metadata.label
+            else event_id
+        )
+        subject = Event.get_by_id(child_id)
+        if subject.data.get("vision_description"):
+            descriptions.append(subject.data["vision_description"])
+            continue
+        images = []
+        offsets = sorted({0.0, float(obj["snapshot_offset"]), max(0, duration / 2)})
+        with tempfile.TemporaryDirectory(dir=recording_path.parent) as directory:
+            for index, offset in enumerate(offsets):
+                image = Path(directory) / f"{index}.jpg"
+                _run_ffmpeg(
+                    config,
+                    "-ss",
+                    str(offset),
+                    "-i",
+                    str(recording_path),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=640:-2",
+                    str(image),
+                )
+                images.append(image.read_bytes())
+        description = client.generate_object_description(
+            config.cameras[metadata.camera], images, subject
+        )
+        if not description:
+            raise DetectionUnavailable("Vision description provider unavailable")
+        Event.update(
+            data={
+                **subject.data,
+                "description": description,
+                "vision_description": description,
+            }
+        ).where(Event.id == child_id).execute()
+        descriptions.append(description)
+    parent = Event.get_by_id(event_id)
+    result = {"status": "complete", "descriptions": descriptions}
+    Event.update(
+        data={
+            **parent.data,
+            "description": " ".join(descriptions),
+            "image_description": result,
+        }
+    ).where(Event.id == event_id).execute()
+    return result
+
+
 def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> dict:
     digest = hashlib.sha256(
         f"{metadata.camera}/{metadata.source}/{metadata.source_event_id}".encode()
@@ -183,12 +249,22 @@ def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> di
                         Path(recording.path),
                         recording.duration,
                     )
+                description = previous.data.get("image_description")
+                if metadata.generate_description and description is None:
+                    description = _apply_description(
+                        config,
+                        metadata,
+                        event_id,
+                        Path(recording.path),
+                        recording.duration,
+                    )
                 return {
                     "success": True,
                     "event_id": event_id,
                     "review_id": event_id,
                     "duplicate": True,
                     "object_detection": detection,
+                    "image_description": description,
                 }
 
         stamp = (
@@ -371,6 +447,11 @@ def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> di
             detection = _apply_detection(
                 config, metadata, event_id, recording_path, duration
             )
+        description = None
+        if metadata.generate_description:
+            description = _apply_description(
+                config, metadata, event_id, recording_path, duration
+            )
         logger.info(
             "Imported external recording %s for camera %s", event_id, metadata.camera
         )
@@ -383,6 +464,7 @@ def _store_import(config, metadata: ExternalEventMetadata, payload: bytes) -> di
             "end_time": end_time,
             "duration": duration,
             "object_detection": detection,
+            "image_description": description,
         }
 
 
@@ -416,7 +498,7 @@ async def import_external_event(
         )
     except DetectionUnavailable:
         raise HTTPException(
-            503, "Object detection unavailable; import can be retried"
+            503, "AI analysis unavailable; import can be retried"
         ) from None
     except (ValueError, StopIteration):
         raise HTTPException(400, "Invalid recording or metadata") from None
