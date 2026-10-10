@@ -12,6 +12,7 @@ from collections import defaultdict
 from multiprocessing.synchronize import Event as MpEvent
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import psutil
@@ -620,17 +621,17 @@ class RecordingMaintainer(threading.Thread):
         cache_path: str,
         segment_info: SegmentInfo,
     ) -> dict[str, Any] | None:
-        # directory will be in utc due to start_time being in utc
+        # Local directory names only; timestamps and media metadata remain UTC.
+        local_time = start_time.astimezone(ZoneInfo("Asia/Shanghai"))
         directory = os.path.join(
             RECORD_DIR,
-            start_time.strftime("%Y-%m-%d/%H"),
+            local_time.strftime("%Y-%m-%d/%H"),
             camera,
         )
 
         os.makedirs(directory, exist_ok=True)
 
-        # file will be in utc due to start_time being in utc
-        file_name = f"{start_time.strftime('%M.%S.mp4')}"
+        file_name = f"{local_time.strftime('%M.%S.mp4')}"
         file_path = os.path.join(directory, file_name)
 
         try:
